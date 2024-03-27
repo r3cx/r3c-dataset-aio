@@ -17,9 +17,8 @@ from tqdm import tqdm
 
 # For AI
 import torch
-from keras.models import load_model
 from huggingface_hub import hf_hub_download
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+import onnxruntime
 
 # Taggers Available For Use
 # - SwinV2: a memory and GPU hog. Best metrics of the bunch
@@ -35,10 +34,10 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 '============================== CHANGE THIS PART ONLY ==============================' 
 TAGGERS = [ # Set the taggers you're going to use in here
-    "wd-v1-4-swinv2-tagger-v2",
-    "wd-v1-4-convnextv2-tagger-v2",
-    "wd-v1-4-moat-tagger-v2",
-    #"wd-swinv2-tagger-v3" # Setup onnx for v3
+    #"wd-v1-4-swinv2-tagger-v2",
+    #"wd-v1-4-convnextv2-tagger-v2",
+    #"wd-v1-4-moat-tagger-v2",
+    "wd-swinv2-tagger-v3"
     ]
 '==================================================================================='
 
@@ -52,10 +51,7 @@ IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".PNG", ".JPG", ".
 DEFAULT_KAOMOJIS = '0_0, (o)_(o), +_+, +_-, ._., <o>_<o>, <|>_<|>, =_=, >_<, 3_3, 6_9, >_o, @_@, ^_^, o_o, u_u, x_x, |_|, ||_||'
 
 # HF repo files to be downloaded 
-FILES = ["keras_metadata.pb", "saved_model.pb", "selected_tags.csv"]
-FILES_V3 = ["model.safetensors", "config.json", "selected_tags.csv"]
-SUB_DIR = "variables"
-SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
+FILES = ["model.onnx", "selected_tags.csv"]
 
 # For ease of use
 CSV_FILE = FILES[-1]
@@ -104,19 +100,13 @@ def LoadTaggers(enableForceDownload):
                     force_download=True,
                     force_filename=file
                 )
-            for file in SUB_DIR_FILES:
-                hf_hub_download(
-                    f"SmilingWolf/{tagger}",
-                    file,
-                    subfolder=SUB_DIR,
-                    cache_dir=os.path.join(f"{TAGGER_PATH}{tagger}", SUB_DIR),
-                    force_download=True,
-                    force_filename=file,
-                )
         else:
             print(f"Using existing WD14 tagger model: SmilingWolf/{tagger}")
         print(f"Loading tagger model: {tagger}")
-        models.append(load_model(f"{TAGGER_PATH}{tagger}"))
+        # Load onnx model
+        modelPath = f"{TAGGER_PATH}{tagger}/{FILES[0]}"
+        session = onnxruntime.InferenceSession(modelPath, None)
+        models.append(session)
     print(f"Completed loading of {len(TAGGERS)} tagger model(s)")
     # Returns the list of loaded models
     return models
@@ -188,58 +178,68 @@ def SetupDataLoader(dataset, batchSize, numWorkers):
     )
     return dataloader
 
-def runBatchInference(imageBatch, models, generalTags, characterTags, undesiredTags, tagFrequencies, generalThreshold, characterThreshold, removeUnderscore):
+def runInference(imageWPath, models, generalTags, characterTags, undesiredTags, tagFrequencies, generalThreshold, characterThreshold, removeUnderscore):
     # Obtain the images from the batch to be passed into the model for inference
-    images = np.array([im for _, im in imageBatch])
+    imageTensor = imageWPath[1]
 
     # inference using all the selected tagger models
     probabilityList = []
     for model in models:
-        probabilityList.append(model(images, training=False).numpy())
+        input_name = model.get_inputs()[0].name
+        output_name = model.get_outputs()[0].name
+        result = model.run([output_name], {input_name: [imageTensor]})[0]
+        probabilityList.append(result)
 
     # Taking the average of all inference batches
     # TODO: Consider adding the capability to take a weighted average
-    averageProbability = np.mean(np.array(probabilityList), axis=0)
+    probability = np.mean(np.array(probabilityList), axis=0)[0]
+
+    # First 4 list elements are for rating tags
+    # - general, sensitive, questionable, explicit
+    # Extract the probabilities of tags that come after these first 4
+    tagProbabilities = probability[4:]
 
     # Compute the scores for each tagger on every tag
-    for (imagePath, _), probability in zip(imageBatch, averageProbability): # Extract only the path and the probability
-        combined_tags = []
-        general_tag_text = ""
-        character_tag_text = ""
-        # Iterate each of the probabilities in list, p
-        for i, p in enumerate(probability[4:]): 
-            # Check general or character tag & probability it passes confidence threshold associated for type
-            if i < len(generalTags) and p >= generalThreshold:
-                tag_name = generalTags[i]
-                if removeUnderscore and tag_name not in DEFAULT_KAOMOJIS:  # ignore emoji tags
-                    tag_name = tag_name.replace("_", " ")
-                if tag_name not in undesiredTags:
-                    tagFrequencies[tag_name] = tagFrequencies.get(tag_name, 0) + 1
-                    general_tag_text += ", " + tag_name
-                    combined_tags.append(tag_name)
-            elif i >= len(generalTags) and p >= characterThreshold:
-                tag_name = characterTags[i - len(generalTags)]
-                if removeUnderscore and len(tag_name) > 3:
-                    tag_name = tag_name.replace("_", " ")
+    imagePath = imageWPath[0]
+    combined_tags = []
+    general_tag_text = ""
+    character_tag_text = ""
+    # Iterate each of the probabilities in list, p, and the tag index i
+    for i, p in enumerate(tagProbabilities): 
+        # Check tag type by index and determine if probability passes threshold
+        if i < len(generalTags) and p >= generalThreshold:
+            tag_name = generalTags[i]
+            if removeUnderscore and tag_name not in DEFAULT_KAOMOJIS:  # ignore emoji tags
+                tag_name = tag_name.replace("_", " ")
+            if tag_name not in undesiredTags:
+                tagFrequencies[tag_name] = tagFrequencies.get(tag_name, 0) + 1
+                general_tag_text += ", " + tag_name
+                combined_tags.append(tag_name)
+        elif i >= len(generalTags) and p >= characterThreshold:
+            tag_name = characterTags[i - len(generalTags)]
+            if removeUnderscore and len(tag_name) > 3:
+                tag_name = tag_name.replace("_", " ")
+            if tag_name not in undesiredTags:
+                tagFrequencies[tag_name] = tagFrequencies.get(tag_name, 0) + 1
+                character_tag_text += ", " + tag_name
+                combined_tags.append(tag_name)
 
-                if tag_name not in undesiredTags:
-                    tagFrequencies[tag_name] = tagFrequencies.get(tag_name, 0) + 1
-                    character_tag_text += ", " + tag_name
-                    combined_tags.append(tag_name)
+    # Remove leading comma from the taglist since we start insertions with ", "
+    if len(general_tag_text) > 0:
+        general_tag_text = general_tag_text[2:]
+    if len(character_tag_text) > 0:
+        character_tag_text = character_tag_text[2:]
 
-        # Remove leading comma from the taglist since we start insertions with ", "
-        if len(general_tag_text) > 0:
-            general_tag_text = general_tag_text[2:]
-        if len(character_tag_text) > 0:
-            character_tag_text = character_tag_text[2:]
+    # Join the combined tags with ,
+    tag_text = ", ".join(combined_tags)
 
-        # Join the combined tags with ,
-        tag_text = ", ".join(combined_tags)
+    # Write the combined tags into a text file with the same name as the image
+    with open(os.path.splitext(imagePath)[0] + FILETYPE_TXT, "wt", encoding="utf-8") as f:
+        f.write(tag_text + "\n")
+        print(f"\n{imagePath}:\n  Character tags: {character_tag_text}\n  General tags: {general_tag_text}")
 
-        # Write the combined tags into a text file with the same name as the image
-        with open(os.path.splitext(imagePath)[0] + FILETYPE_TXT, "wt", encoding="utf-8") as f:
-            f.write(tag_text + "\n")
-            print(f"\n{imagePath}:\n  Character tags: {character_tag_text}\n  General tags: {general_tag_text}")
+    # Return the tag frequencies for overall statistics record keeping
+    return tagFrequencies
 
 def main(args):
     # Load/Download our required taggers
@@ -260,7 +260,6 @@ def main(args):
         dataPairs = [[(None, ip)] for ip in image_paths] # If no dataloader, map None to the path, load the file in runtime
     
     tagFrequencies = {}
-    imageBatch = []
 
     # Iterate the dataPairs and group them into batches before calling inference
     for data_entry in tqdm(dataPairs, smoothing=0.0):
@@ -269,7 +268,6 @@ def main(args):
                 continue
             # Split the current data into the image tensor and the file path
             image, image_path = data
-            # Gather the images into batches
             if image is not None: # If the image tensor is already loaded (From DataLoader)
                 image = image.detach().numpy()
             else: # Otherwise try to load the image as a tensor
@@ -281,20 +279,9 @@ def main(args):
                 except Exception as e:
                     print(f"{FILE_OPEN_ERROR}{image_path}, {ERROR}{e}")
                     continue
-            # Add this current image to the image batch for processing later
-            imageBatch.append((image_path, image))
-
-            # Once we have enough images in the batch, begin processing
-            if len(imageBatch) >= args.batch_size:
-                imageBatch = [(str(image_path), image) for image_path, image in imageBatch]
-                tagFrequencies = runBatchInference(imageBatch, models, generalTags, characterTags, undesiredTags, tagFrequencies, args.general_threshold, args.character_threshold, args.remove_underscore)
-                imageBatch.clear()
+            # Run inference on image
+            tagFrequencies = runInference((str(image_path), image), models, generalTags, characterTags, undesiredTags, tagFrequencies, args.general_threshold, args.character_threshold, args.remove_underscore)
     
-    # If the final batch was not a full batch, run inference on the remainder
-    if len(imageBatch) > 0:
-        imageBatch = [(str(image_path), image) for image_path, image in imageBatch]
-        tagFrequencies = runBatchInference(imageBatch, models, generalTags, characterTags, undesiredTags, tagFrequencies, args.general_threshold, args.character_threshold, args.remove_underscore)
-
     # If there is a need to print tag frequencies
     if args.frequency_tags:
         sorted_tags = sorted(tagFrequencies.items(), key=lambda x: x[1], reverse=True)
@@ -354,7 +341,7 @@ if __name__ == "__main__":
 
     # Testing Code
     args.batch_size=4
-    args.general_threshold=0.35
+    args.general_threshold=0.2
     args.character_threshold=1 
     args.max_data_loader_n_workers=2
     args.undesired_tags = "alternative costume" 
