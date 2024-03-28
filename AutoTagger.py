@@ -89,26 +89,23 @@ def LoadTaggers(enableForceDownload):
     models = []
     # Load each of the selected taggers - Download from SmilingWolf HF if not locally available
     for tagger in TAGGERS:
+        # Download if required, else load from existing
         if not os.path.exists(f"{TAGGER_PATH}{tagger}") or enableForceDownload:
             print(f"Downloading WD14 tagger model from HF: SmilingWolf/{tagger}")
             # Download the specified files in the repo, inclusive of those in the subdirectories
             for file in FILES:
-                hf_hub_download(
-                    f"SmilingWolf/{tagger}",
-                    file,
-                    cache_dir=f"{TAGGER_PATH}{tagger}",
-                    force_download=True,
-                    force_filename=file
-                )
+                hf_hub_download(f"SmilingWolf/{tagger}", file, cache_dir=f"{TAGGER_PATH}{tagger}", force_download=True, force_filename=file)
         else:
             print(f"Using existing WD14 tagger model: SmilingWolf/{tagger}")
         print(f"Loading tagger model: {tagger}")
+       
         # Load onnx model
         modelPath = f"{TAGGER_PATH}{tagger}/{FILES[0]}"
         session = onnxruntime.InferenceSession(modelPath, None)
         models.append(session)
-    print(f"Completed loading of {len(TAGGERS)} tagger model(s)")
+        
     # Returns the list of loaded models
+    print(f"Completed loading of {len(TAGGERS)} tagger model(s)")
     return models
 
 # Extracts the list of general and character tags from the .csv file that comes with the taggers
@@ -167,10 +164,10 @@ def DiscardCorruptedDataInBatch(batch):
     batch = list(filter(lambda x: x is not None, batch))
     return batch
 
-def SetupDataLoader(dataset, batchSize, numWorkers):
+def SetupDataLoader(dataset, numWorkers):
     dataloader = torch.utils.data.DataLoader(
         dataset,
-        batch_size=batchSize,
+        batch_size=1,
         shuffle=False,
         num_workers=numWorkers,
         collate_fn=DiscardCorruptedDataInBatch,
@@ -178,7 +175,7 @@ def SetupDataLoader(dataset, batchSize, numWorkers):
     )
     return dataloader
 
-def runInference(imageWPath, models, generalTags, characterTags, undesiredTags, tagFrequencies, generalThreshold, characterThreshold, removeUnderscore):
+def RunInference(imageWPath, models, generalTags, characterTags, undesiredTags, tagFrequencies, generalThreshold, characterThreshold, debugPrint):
     # Obtain the images from the batch to be passed into the model for inference
     imageTensor = imageWPath[1]
 
@@ -209,7 +206,7 @@ def runInference(imageWPath, models, generalTags, characterTags, undesiredTags, 
         # Check tag type by index and determine if probability passes threshold
         if i < len(generalTags) and p >= generalThreshold:
             tag_name = generalTags[i]
-            if removeUnderscore and tag_name not in DEFAULT_KAOMOJIS:  # ignore emoji tags
+            if tag_name not in DEFAULT_KAOMOJIS:  # ignore emoji tags
                 tag_name = tag_name.replace("_", " ")
             if tag_name not in undesiredTags:
                 tagFrequencies[tag_name] = tagFrequencies.get(tag_name, 0) + 1
@@ -217,8 +214,7 @@ def runInference(imageWPath, models, generalTags, characterTags, undesiredTags, 
                 combined_tags.append(tag_name)
         elif i >= len(generalTags) and p >= characterThreshold:
             tag_name = characterTags[i - len(generalTags)]
-            if removeUnderscore and len(tag_name) > 3:
-                tag_name = tag_name.replace("_", " ")
+            tag_name = tag_name.replace("_", " ")
             if tag_name not in undesiredTags:
                 tagFrequencies[tag_name] = tagFrequencies.get(tag_name, 0) + 1
                 character_tag_text += ", " + tag_name
@@ -236,26 +232,27 @@ def runInference(imageWPath, models, generalTags, characterTags, undesiredTags, 
     # Write the combined tags into a text file with the same name as the image
     with open(os.path.splitext(imagePath)[0] + FILETYPE_TXT, "wt", encoding="utf-8") as f:
         f.write(tag_text + "\n")
-        print(f"\n{imagePath}:\n  Character tags: {character_tag_text}\n  General tags: {general_tag_text}")
+        if debugPrint:
+            print(f"\n{imagePath}:\n  Character tags: {character_tag_text}\n  General tags: {general_tag_text}")
 
     # Return the tag frequencies for overall statistics record keeping
     return tagFrequencies
 
-def main(args):
+def StartAutoTagger(inputs):
     # Load/Download our required taggers
-    models = LoadTaggers(args.force_download)
+    models = LoadTaggers(inputs.force_download)
 
     # Load the list of general and character tags from the tagger csv
     generalTags, characterTags = LoadTagLists()
 
     # Gather image paths and load the images
-    image_paths = GatherImagePaths(Path(args.train_data_dir), args.recursive)
+    image_paths = GatherImagePaths(Path(inputs.data_dir), inputs.recursive_gather)
 
-    undesiredTags = set(args.undesiredTags.split(","))
+    undesiredTags = set(inputs.undesired_tags.split(","))
 
     # If the number of dataloaders is set, use a dataloader for faster loading
-    if args.max_data_loader_n_workers is not None:
-        dataPairs = SetupDataLoader(ImageLoadingPrepDataset(image_paths), args.batch_size, args.max_data_loader_n_workers)
+    if inputs.num_data_loader_workers is not None:
+        dataPairs = SetupDataLoader(ImageLoadingPrepDataset(image_paths), inputs.num_data_loader_workers)
     else:
         dataPairs = [[(None, ip)] for ip in image_paths] # If no dataloader, map None to the path, load the file in runtime
     
@@ -280,54 +277,38 @@ def main(args):
                     print(f"{FILE_OPEN_ERROR}{image_path}, {ERROR}{e}")
                     continue
             # Run inference on image
-            tagFrequencies = runInference((str(image_path), image), models, generalTags, characterTags, undesiredTags, tagFrequencies, args.general_threshold, args.character_threshold, args.remove_underscore)
+            tagFrequencies = RunInference((str(image_path), image), models, generalTags, characterTags, undesiredTags, tagFrequencies, inputs.general_threshold, inputs.character_threshold, inputs.debug_print)
     
     # If there is a need to print tag frequencies
-    if args.frequency_tags:
+    if inputs.frequency_tags:
         sorted_tags = sorted(tagFrequencies.items(), key=lambda x: x[1], reverse=True)
         print("\nTag frequencies:")
         for tag, freq in sorted_tags:
             print(f"{tag}: {freq}")
 
     print("Autotagging Completed!")
-    input("Enter anything to terminate")
+    print()
+    #input("Enter anything to terminate")
 
 def setupArgumentParser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train_data_dir", type=str, help="directory for train images")
-    #parser.add_argument("--repo_id", type=str, default=DEFAULT_WD14_TAGGER_REPO, help="repo id for wd14 tagger on Hugging Face")
-    parser.add_argument("--force_download", action="store_true", help="force downloading wd14 tagger models")
-    parser.add_argument("--batch_size", type=int, default=1, help="batch size in inference")
-    parser.add_argument("--max_data_loader_n_workers", type=int, default=None, help="enable image reading by DataLoader with this number of workers (faster)")
-    #parser.add_argument("--caption_extension", type=str, default=".txt", help="extension of caption file")
-    parser.add_argument("--thresh", type=float, default=0.35, help="threshold of confidence to add a tag")
-    parser.add_argument("--general_threshold", type=float, default=None, help="threshold of confidence to add a tag for general category, same as --thresh if omitted")
-    parser.add_argument("--character_threshold",type=float, default=None, help="threshold of confidence to add a tag for character category, same as --thresh if omitted")
-    parser.add_argument("--recursive", action="store_true", help="search for images in subfolders recursively")
-    parser.add_argument("--remove_underscore", action="store_true", help="replace underscores with spaces in the output tags")
-    parser.add_argument("--undesiredTags", type=str, default="", help="comma-separated list of undesired tags to remove from the output")
-    parser.add_argument("--frequency_tags", action="store_true", help="Show frequency of tags for images")
+    parser.add_argument("--data_dir", type=str, help="Directory of images to be tagged")
+    parser.add_argument("--num_data_loader_workers", type=int, default=None, help="Number of workers to be used in the Torch DataLoader, set 0 to not use DataLoader")
+    parser.add_argument("--threshold", type=float, default=0.35, help="Threshold of confidence to add a tag, tag confidence must be >= to threshold")
+    parser.add_argument("--general_threshold", type=float, default=None, help="Threshold of confidence to add a tag for general category, same value as --threshold used if omitted")
+    parser.add_argument("--character_threshold",type=float, default=None, help="Threshold of confidence to add a tag for character category, same value as --threshold used if omitted")
+    parser.add_argument("--undesired_tags", type=str, default="", help="comma-separated list of undesired tags to remove from the output")
+    parser.add_argument("--recursive_gather", action="store_true", help="If enabled, recursively gather images in subfolders of --data_dir")
+    parser.add_argument("--frequency_tags", action="store_true", help="If enabled, print the frequency of tags across all tagged images")
+    parser.add_argument("--force_download", action="store_true", help="If enabled, force download / redownload tagger models")
+    parser.add_argument("--debug_print", action="store_true", help="If enabled, print the tag results for each image")
     return parser
 
-def run(dataDir):
-    parser = setupArgumentParser()
-
-    args = parser.parse_args()
-
-    args.batch_size=4
-    args.general_threshold=0.35
-    args.character_threshold=1 
-    args.max_data_loader_n_workers=2
-    args.undesired_tags = "alternative costume" 
-    args.train_data_dir = dataDir
-    args.remove_underscore = True
-    
-    if args.general_threshold is None:
-        args.general_threshold = args.thresh
-    if args.character_threshold is None:
-        args.character_threshold = args.thresh
-
-    main(args)
+# Enables use of dot.notation to access to dictionary attributes
+class DotDict(dict):
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
 
 if __name__ == "__main__":
     parser = setupArgumentParser()
@@ -335,18 +316,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.general_threshold is None:
-        args.general_threshold = args.thresh
+        args.general_threshold = args.threshold
     if args.character_threshold is None:
-        args.character_threshold = args.thresh
+        args.character_threshold = args.threshold
 
-    # Testing Code
-    args.batch_size=4
-    args.general_threshold=0.2
-    args.character_threshold=1 
-    args.max_data_loader_n_workers=2
-    args.undesired_tags = "alternative costume" 
-    args.train_data_dir = "F:\StableDiffusion\Datasets\Z Tools\Test"
-    args.remove_underscore = True
-    #
-
-    main(args)
+    StartAutoTagger(DotDict(vars(args)))

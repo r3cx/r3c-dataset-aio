@@ -1,5 +1,10 @@
 @echo off
 
+:: YOUR SETTINGS GO HERE
+set DATA_DIR="F:\StableDiffusion\Datasets\Z Tools\Test"
+:: --
+
+
 set "VENV_DIR=%~dp0%venv"
 
 :: Check if python is accessible within the path
@@ -11,7 +16,11 @@ if %ERRORLEVEL% == 0 (
 
     :: Start AutoTagger
     echo Starting AutoTagger...
-    python AutoTagger.py
+    python AutoTagger.py --general_threshold=0.25 --character_threshold=1 --num_data_loader_workers="2" --frequency_tags --data_dir %DATA_DIR%
+
+    :: Start DatasetPreparer
+    echo Starting DatasetPreparer...
+    python DatasetPreparer.py --data_dir %DATA_DIR%
 
     :: Deactivate the virtual environment
     call .\venv\Scripts\deactivate.bat

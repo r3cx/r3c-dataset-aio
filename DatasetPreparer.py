@@ -1,3 +1,4 @@
+import argparse
 import os
 # Note: Use double slash for path \\
 FOLDERS =   [
@@ -115,9 +116,16 @@ def ProcessDataset(datasetPath, verbose=True):
     print("Highest Tag Count: " + str(max(tagStats)))
     print("Lowest Tag Count: " + str(min(tagStats)))
     print()
-    input("Continue? ")
+    #input("Continue? ")
     print()
    
-# Multiproceesing capable logic
-for folderPath in FOLDERS:
-    ProcessDataset(folderPath)
+def RunMultiprocessing():
+    for folderPath in FOLDERS:
+        ProcessDataset(folderPath)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_dir", type=str, help="Directory of images to be processed")
+    args = parser.parse_args()
+
+    ProcessDataset(args.data_dir)
