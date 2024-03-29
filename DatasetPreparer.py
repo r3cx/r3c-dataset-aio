@@ -1,9 +1,5 @@
 import argparse
 import os
-# Note: Use double slash for path \\
-FOLDERS =   [
-                r"F:\StableDiffusion\Datasets\2 Baking\Thomasz\1_Text",
-            ]
 
 # Score tags for pony
 SCORE = "score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up"
@@ -118,10 +114,6 @@ def ProcessDataset(datasetPath, verbose=True):
     print()
     #input("Continue? ")
     print()
-   
-def RunMultiprocessing():
-    for folderPath in FOLDERS:
-        ProcessDataset(folderPath)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

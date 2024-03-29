@@ -37,7 +37,9 @@ TAGGERS = [ # Set the taggers you're going to use in here
     #"wd-v1-4-swinv2-tagger-v2",
     #"wd-v1-4-convnextv2-tagger-v2",
     #"wd-v1-4-moat-tagger-v2",
-    "wd-swinv2-tagger-v3"
+    "wd-swinv2-tagger-v3",
+    #"wd-vit-tagger-v3",
+    "wd-convnext-tagger-v3",
     ]
 '==================================================================================='
 
@@ -175,7 +177,7 @@ def SetupDataLoader(dataset, numWorkers):
     )
     return dataloader
 
-def RunInference(imageWPath, models, generalTags, characterTags, undesiredTags, tagFrequencies, generalThreshold, characterThreshold, debugPrint):
+def RunInference(imageWPath, models, generalTags, characterTags, undesiredTags, tagFrequencies, generalThreshold, characterThreshold, modeAppend, debugPrint):
     # Obtain the images from the batch to be passed into the model for inference
     imageTensor = imageWPath[1]
 
@@ -230,10 +232,15 @@ def RunInference(imageWPath, models, generalTags, characterTags, undesiredTags, 
     tag_text = ", ".join(combined_tags)
 
     # Write the combined tags into a text file with the same name as the image
-    with open(os.path.splitext(imagePath)[0] + FILETYPE_TXT, "wt", encoding="utf-8") as f:
-        f.write(tag_text + "\n")
-        if debugPrint:
-            print(f"\n{imagePath}:\n  Character tags: {character_tag_text}\n  General tags: {general_tag_text}")
+    if modeAppend:
+        with open(os.path.splitext(imagePath)[0] + FILETYPE_TXT, "a", encoding="utf-8") as f:
+            f.write(", " + tag_text + "\n")
+    else:     
+        with open(os.path.splitext(imagePath)[0] + FILETYPE_TXT, "wt", encoding="utf-8") as f:
+            f.write(tag_text + "\n")
+
+    if debugPrint:
+        print(f"\n{imagePath}:\n  Character tags: {character_tag_text}\n  General tags: {general_tag_text}")
 
     # Return the tag frequencies for overall statistics record keeping
     return tagFrequencies
@@ -277,7 +284,7 @@ def StartAutoTagger(inputs):
                     print(f"{FILE_OPEN_ERROR}{image_path}, {ERROR}{e}")
                     continue
             # Run inference on image
-            tagFrequencies = RunInference((str(image_path), image), models, generalTags, characterTags, undesiredTags, tagFrequencies, inputs.general_threshold, inputs.character_threshold, inputs.debug_print)
+            tagFrequencies = RunInference((str(image_path), image), models, generalTags, characterTags, undesiredTags, tagFrequencies, inputs.general_threshold, inputs.character_threshold, inputs.mode_append, inputs.debug_print)
     
     # If there is a need to print tag frequencies
     if inputs.frequency_tags:
@@ -301,6 +308,7 @@ def setupArgumentParser() -> argparse.ArgumentParser:
     parser.add_argument("--recursive_gather", action="store_true", help="If enabled, recursively gather images in subfolders of --data_dir")
     parser.add_argument("--frequency_tags", action="store_true", help="If enabled, print the frequency of tags across all tagged images")
     parser.add_argument("--force_download", action="store_true", help="If enabled, force download / redownload tagger models")
+    parser.add_argument("--mode_append", action="store_true", help="If enabled, appends tags to existing tag file instead of overwriting the tag file")
     parser.add_argument("--debug_print", action="store_true", help="If enabled, print the tag results for each image")
     return parser
 

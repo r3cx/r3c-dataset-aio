@@ -1,9 +1,8 @@
 @echo off
 
 :: YOUR SETTINGS GO HERE
-set DATA_DIR="F:\StableDiffusion\Datasets\Z Tools\Test"
+set DATA_DIR="F:\StableDiffusion\Datasets\3 Pending\Milimon\1_Style"
 :: --
-
 
 set "VENV_DIR=%~dp0%venv"
 
