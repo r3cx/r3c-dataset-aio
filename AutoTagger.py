@@ -4,7 +4,6 @@ import argparse
 
 # File I/O & Pathing
 import os
-import glob
 from pathlib import Path
 
 # Images
