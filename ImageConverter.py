@@ -8,9 +8,9 @@ from PIL import Image
 import pillow_avif
 
 # Image folder path
-datasetPath = r"F:\StableDiffusion\Datasets\3 Pending\Thomasz\Temp"
+datasetPath = r"F:\StableDiffusion\Datasets\Z Tools\Test"
 # Path to save to
-savePath = r"F:\StableDiffusion\Datasets\3 Pending\Thomasz\Temp"
+savePath = r"F:\StableDiffusion\Datasets\Z Tools\Test"
 
 # File type to load
 fileFormat = ".avif"

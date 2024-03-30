@@ -8,7 +8,7 @@ SCORE = "score_9, score_8_up, score_7_up, score_6_up, score_5_up, score_4_up"
 TRIGGER = ""
 
 # Remove tags that add no value
-NEGATIVES = ["transparent background", "unknown", "official alternate costume", "alternate costume", "alternate hairstyle", "alternate breast size", "official alternate hairstyle", "alternate hair length", "alternate eye color", "alternate hair color", "virtual youtuber"]
+NEGATIVES = "transparent background, unknown, official alternate costume, alternate costume, alternate hairstyle, alternate breast size, official alternate hairstyle, alternate hair length, alternate eye color, alternate hair color, virtual youtuber, score 9, score 8 up, score 7 up, score 6 up, score 5 up, score 4 up"
 
 def RemoveDuplicateTags(tagList):
     # Resplit the tags before dupe check in case score / kw had delimited tags
@@ -68,7 +68,7 @@ def escapeParenthesisAndReplaceUnderscore(tags):
 
     return modified_list
 
-def ProcessDataset(datasetPath, verbose=True):
+def ProcessDataset(datasetPath, trigger, quality, undesired):
     print("Start Processing For: " + datasetPath)
     # Gather text files corresponding to the images in the specified folder
     txt_files = [f for f in os.listdir(datasetPath) if f.endswith(".txt")]
@@ -80,22 +80,22 @@ def ProcessDataset(datasetPath, verbose=True):
             # Read the contents of the file and split by commas
             tags = [tag.strip() for tag in f.read().split(",")]
 
-            # Add score tags
-            if SCORE != "":
-                tags.insert(0, SCORE)
-
-            # Add trigger tags
-            if TRIGGER != "":
-                tags.insert(0, TRIGGER)
+            # Escape Parentheses and replace underscores
+            tags = escapeParenthesisAndReplaceUnderscore(tags)
 
             # Remove negative tags
-            tags = RemoveNegativeTags(tags, NEGATIVES)
+            tags = RemoveNegativeTags(tags, undesired)
 
             # Prune preceeding tags
             tags = PrunePreceedingTags(tags)
 
-            # Escape Parentheses and replace underscores
-            tags = escapeParenthesisAndReplaceUnderscore(tags)
+            # Add score tags
+            if quality != "":
+                tags.insert(0, quality)
+
+            # Add trigger tags
+            if trigger != "":
+                tags.insert(0, trigger)
 
             # Remove duplicates while maintaining the order
             tags = RemoveDuplicateTags(tags)
@@ -115,9 +115,16 @@ def ProcessDataset(datasetPath, verbose=True):
     #input("Continue? ")
     print()
 
-if __name__ == "__main__":
+def setupArgumentParser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, help="Directory of images to be processed")
+    parser.add_argument("--data_dir", type=str, help="Directory of images to be tagged")
+    parser.add_argument("--trigger_tag", type=str, default=TRIGGER, help="Inserts this activation tag into the front of each tag file (Default: No activation tag)")
+    parser.add_argument("--quality_tags", type=str, default=SCORE, help="Comma-separated list of quality tags to add to the output (Default: PonyXL score tags)")
+    parser.add_argument("--undesired_tags", type=str, default=NEGATIVES, help="Comma-separated list of tags to remove from the output (Default: Refer to DatasetPreparer.py for list of tags)")
+    return parser
+
+if __name__ == "__main__":
+    parser = setupArgumentParser()
     args = parser.parse_args()
 
-    ProcessDataset(args.data_dir)
+    ProcessDataset(args.data_dir, args.trigger_tag, args.quality_tags, args.undesired_tags)

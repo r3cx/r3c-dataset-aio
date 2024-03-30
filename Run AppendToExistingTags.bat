@@ -1,7 +1,10 @@
 @echo off
 
 :: YOUR SETTINGS GO HERE
-set DATA_DIR="F:\StableDiffusion\Datasets\3 Pending\Hotate-Chan\1_Style"
+set DATA_DIR="F:\StableDiffusion\Datasets\Z Tools\Test"
+set TRIGGER=""
+::set QUALITY=""   ::Fill in your own tags and add --quality_tags QUALITY to the call to DatasetPreparer.py to use your own set of tags
+::set UNDESIRED="" ::Fill in your own tags and add --undesired_tags UNDESIRED to the call to DatasetPreparer.py to use your own set of tags 
 :: --
 
 set "VENV_DIR=%~dp0%venv"
@@ -19,7 +22,7 @@ if %ERRORLEVEL% == 0 (
 
     :: Start DatasetPreparer
     echo Starting DatasetPreparer...
-    python DatasetPreparer.py --data_dir %DATA_DIR%
+    python DatasetPreparer.py --data_dir %DATA_DIR% --trigger_tag %TRIGGER%
 
     :: Deactivate the virtual environment
     call .\venv\Scripts\deactivate.bat
