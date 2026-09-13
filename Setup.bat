@@ -22,5 +22,7 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 echo Setup Complete!
 
+::call BuildLLama.bat
+
 :: Deactivate the virtual environment
 call .\venv\Scripts\deactivate.bat

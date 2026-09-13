@@ -1,2 +1,16 @@
+QuantumMerge-sdxl-main/
+# Ignore Modules folder
+Modules/
 venv/
 Taggers/
+Archived/
+Captioner/QwenCache/
+Upscalers/
+.kilo/kilo.jsonc
+.gradio/flagged/dataset1.csv
+.gradio/flagged/image/ba4386c1f07f5a8a109c/00242-635910179.png
+config.py
+.vscode/settings.json
+.gitignore
+*/__pycache__/*
+.kilo/*
