@@ -1,16 +1,43 @@
-QuantumMerge-sdxl-main/
-# Ignore Modules folder
-Modules/
+# Python
 venv/
-Taggers/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+.pytest_cache/
+
+# IDE / Editor
+.vscode/
+
+# Kilo
+.kilo/
+
+# Gradio (includes .gradio/flagged)
+.gradio/
+
+# Model weights & downloaded caches (large binaries)
+*.pth
+*.pt
+*.onnx
+*.safetensors
+*.ckpt
+*.bin
+**/.cache/
+
+# Downloaded model / upscaler assets (keep folder via .gitkeep)
+Upscalers/*
+!Upscalers/.gitkeep
+TagManagement/Models/*
+!TagManagement/Models/.gitkeep
+
+# Planning / TODO docs (kept local, not committed)
+TagManagement/Documents/
+
+# Omit Tests and downloaded benchmark images
+TagManagement/Tests/
+TagManagement/Tests/Benchmark/
+
+# Project
 Archived/
-Captioner/QwenCache/
-Upscalers/
-.kilo/kilo.jsonc
-.gradio/flagged/dataset1.csv
-.gradio/flagged/image/ba4386c1f07f5a8a109c/00242-635910179.png
 config.py
-.vscode/settings.json
-.gitignore
-*/__pycache__/*
-.kilo/*
