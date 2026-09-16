@@ -1,115 +1,328 @@
 # r3c-dataset-aio
 
-Hey, this is where I keep all my dataset management tools. Everything from tagging and cleaning to upscaling, log parsing, and LoRA metadata stuff — basically the whole pipeline for prepping datasets for SD training.
+Hey, this is my dataset prep playground. It's basically everything I use to turn a
+folder of anime art into something ready for SD/LoRA training — autotagging (which
+is now a proper multi-model ensemble thing), tag cleaning, upscaling, LoRA metadata,
+and training log parsing.
+
+The tagger side got a big refactor. It used to be a couple of fat single-file
+scripts; now it's a small package with a clean three-layer design — **tagger models,
+ensembles, and autotagger entry points** — all built on top of one shared
+sliding-window pipeline. The rest of the tools live under `Utilities/`.
 
 ---
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
-- [Core Tools](#core-tools)
-  - [AutoTagger](#autotagger)
-  - [AutoTaggerV2](#autotaggers)
-  - [DatasetPreparer](#datasetpreparer)
+- [The Autotagger System](#the-autotagger-system)
+  - [How the pipeline works](#how-the-pipeline-works)
+  - [Layer 1 — Taggers (the models)](#layer-1--taggers-the-models)
+  - [Layer 2 — Ensembles](#layer-2--ensembles)
+  - [Layer 3 — Autotaggers (what you actually run)](#layer-3--autotaggers-what-you-actually-run)
+  - [CLI flags](#cli-flags)
+  - [Running from the command line](#running-from-the-command-line)
+- [Tagging Launchers](#tagging-launchers)
+- [DatasetPreparer](#datasetpreparer)
 - [Utilities](#utilities)
   - [Image Utilities](#image-utilities)
   - [Tag File Utilities](#tag-file-utilities)
   - [Dataset Utilities](#dataset-utilities)
-  - [Statistics Utilities](#statistics-utilities)
   - [LoRA Utilities](#lora-utilities)
-- [Taggers](#taggers)
 - [Upscalers](#upscalers)
-- [Modules](#modules)
-- [Archived](#archived)
+- [Project Structure](#project-structure)
 
 ---
 
 ## Quick Start
 
-```bash
-# 1. Clone and enter the project directory
+```powershell
+# 1. Clone and enter the project
+git clone <repo-url>
 cd r3c-dataset-aio
 
-# 2. Run the setup script
+# 2. One-shot setup: builds a venv and installs requirements
 .\Setup.bat
 
-# 3. Install Python dependencies
-pip install -r requirements.txt
+# 3. Tagging and everything else runs from the .\venv (the .bat launchers do this for you)
 ```
 
-### Config File
+`Setup.bat` creates `.venv`/`venv`, activates it, and pip-installs `requirements.txt`.
+Every launcher and script assumes that venv exists — if you ever see
+*"Incomplete Setup Detected. Run 'Setup.bat' first!"*, that's why.
 
-Some tools require API credentials. Create `config.py` in the project root with your credentials:
+### Models
+
+The tagger weights live in `.gitignore`d folders (`TagManagement/Models/` and
+`Upscalers/`) so they're **not** in the repo. They get pulled in automatically:
+
+- The WD1.4 ONNX tagger downloads itself from HuggingFace on first load.
+- The Danbooru-v4 taggers are **gated** repos, so their first download needs a
+  readable HuggingFace token. Set it one of these ways, once:
+  - `--hf_token hf_...` on the command line (or in the .bat)
+  - `HF_TOKEN=hf_...` environment variable
+  - `hf login` inside the venv
+
+  Once the files are in `Models/`, no credential is ever needed again. You can also
+  pre-place the weights and pass `--no_download`.
+
+### Danbooru API config file (optional)
+
+Only the tag-file tools in `Utilities/Tag Files` need this — everything else runs
+fine without it. They read your credentials from a `config.py` (it's `.gitignore`d,
+so keep that file local):
 
 ```python
-# config.py (gitignored, create manually)
-DANBOORU_USERNAME = "your_username"
-DANBOORU_API_KEY = "your_api_key"
+# config.py — Danbooru API credentials
+DANBOORU_USERNAME = "your_danbooru_username"
+DANBOORU_API_KEY  = "your_api_key_from_danbooru"
 ```
 
-This file is ignored by Git and will not be committed.
+That's the whole thing — it just needs to be a module that the scraper can
+`from config import` from, and it only looks at two module-level string constants:
 
-### requirements.txt
+- **`DANBOORU_USERNAME`** — your Danbooru account username. It's used for the
+  **HTTP Basic auth** credentials (`session.auth = (username, api_key)`) and is also
+  stitched into the `User-Agent` header (the code sends `"<username>-tag-exporter/1.0"`).
+  Keep it the real username Danbooru knows you by.
+- **`DANBOORU_API_KEY`** — your Danbooru API key. Grab it from Danbooru under
+  **Account → Edit account → API key**; it's shown once when generated, so copy it
+  before the popup closes.
 
-The project requires Python 3.10+ with the following key dependencies:
-- **torch** >= 2.7.0 (CUDA 12.6)
-- **transformers** >= 4.52.0
-- **Pillow** >= 10.0.0 (with pillow-avif-plugin for AVIF support)
-- **opencv-python** >= 4.8.0
-- **onnxruntime-gpu** (for ONNX model inference)
-- **gradio** >= 4.40.0
-- **safetensors** >= 0.4.3
-- **numpy**, **tqdm**, **matplotlib**, **openpyxl**
+**Where the file lives:** `DanbooruTagScraper.py` puts the project root on `sys.path`
+(via `Path(__file__).parents[2]`) and then imports by name, so it just needs to be a
+`config.py` sitting **at the project root** — the same folder as the repo `.gitignore`.
+Drop it there, keep it local, and the import resolves from there no matter where the
+scraper is launched.
+
+### Key dependencies
+
+`requirements.txt` targets a CUDA 12.6 box. The important pins: `torch >= 2.7.0`
+(plus `torchvision`), `transformers >= 4.52.0`, `onnxruntime-gpu == 1.19.2`
+(the ONNX Eva02 tagger), `gradio >= 4.40.0`, `Pillow` + `pillow-avif-plugin`,
+`opencv-python`, and the data toolkit (`numpy`, `pandas`, `tqdm`, `openpyxl`,
+`matplotlib`).
 
 ---
 
-## Core Tools
+## The Autotagger System
 
-### AutoTagger (`Tag Tools/AutoTagger.py`)
+The whole tagging feature lives in `TagManagement/`. It's split into three layers so
+each piece stays small and testable. The class hierarchy:
 
-Latest autotagger script. Supports both V2 and V3 tagger models via ONNX inference with automatic HuggingFace model download.
+```
+Taggers/   (models)
+  Tagger (base: paths, download, load/unload)
+    ├── Eva02Tagger           ONNX, WD1.4 EVA02-Large  (regression baseline)
+    └── Dbv4Tagger (base)     PyTorch, Danbooru-v4 shared pipeline
+          ├── EvaGiantTagger
+          ├── ViTGiantTagger
+          └── ConvNeXtV2Tagger
 
-**Supported taggers:**
-- **SwinV2** - Best accuracy, higher GPU/memory usage (`wd-v1-4-swinv2-tagger-v2`, `wd-swinv2-tagger-v3`)
-- **ViT** - Fastest inference, slightly lower precision (`wd-v1-4-vit-tagger`, `wd-vit-tagger-v3`, `wd-vit-large-tagger-v3`)
-- **ConvNeXt** - Balanced performance and accuracy (`wd-v1-4-convnext-tagger`, `wd-convnext-tagger-v3`)
-- **EVA02** - EVA02 ViT Large (`wd-eva02-large-tagger-v3`)
-- **Moat** - Alternative architecture (`wd-v1-4-moat-tagger-v2`)
-- **ConvNeXtV2** - Updated ConvNeXt variant (`wd-v1-4-convnextv2-tagger-v2`)
+Ensembles/ (pure combination math, no models)
+  └── EnsembleTagger          sparse equal-weight averaging
 
-**Features:**
-- Configurable tagger selection (edit the `TAGGERS` list in the script)
-- Supports `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp` formats
-- Automatic tag confidence scoring
-- Kaomoji filtering to prevent false positives
-- Batch processing with progress bars
+Autotaggers/ (entry points)
+  Autotagger (base: config, discovery, .txt output, frequencies, CLI)
+    └── SlidingWindowAutotagger   (crop gen, composition routing, window merge, selection)
+          ├── Eva02SlidingWindowAutotagger   single-model baseline
+          └── EnsembleSWAutoTagger           multi-model ensemble
+```
 
-### AutoTaggerV2 (`Tag Tools/AutoTaggerV2.py`)
+### How the pipeline works
 
-Legacy version constrained to V2 taggers only. Use `AutoTagger.py` for V3 model support.
+Every autotagger runs the same sliding-window routine (lives in
+`SlidingWindowAutotagger.py`):
 
-**Convenience scripts:**
-- `Run CreateNewTags.bat` - Generate new tag files for images
-- `Run AppendToExistingTags.bat` - Append tags to existing `.txt` files
-- `Run Add Trigger.bat` - Add trigger tags to images
-- `Run TagClean.bat` - General tag cleaning
-- `Run TagCleanChar.bat` - Character-specific tag cleaning
+1. **Window the image** at its original resolution — a grid of crops sized to the
+   image's short axis (or `--window_size_cap`), with ~10% overlap. A full-image
+   **global scan** crop is always appended last.
+2. **Tag each crop** with the model(s). Big crops are pre-sized inside the
+   DataLoaders (`--num_data_loader_workers`), so the resize never blocks the one
+   thread doing inference.
+3. **Merge the crops.** Normal tags take the **max** across all crops (so a feature
+   in *any* window gets its best confidence). **Composition tags** and **character
+   tags** always use the **global scan** value, because crops lack the full-image
+   context those tags need (a crop can't tell you how many girls are in the scene,
+   or cut a twintail into a "side ponytail").
+4. **Select and write.** Apply the general / character thresholds, drop the
+   kaomoji + your `--undesired_tags` set, put character tags up front, and write a
+   `.txt` next to each image (append or overwrite).
 
-### DatasetPreparer (`Tag Tools/DatasetPreparer.py`)
+That composition/character split is the heart of why sliding windows work here —
+fine local detail (a specific earring) still gets caught in a tight crop, while
+scene-level facts come from the whole-image pass.
 
-Post-processing tool for prepared tag files. Cleans, prunes, and formats tags for training.
+### Layer 1 — Taggers (the models)
 
-**Features:**
-- Duplicate tag removal while preserving order
-- Precedence pruning (e.g., keeps "huge breasts" over "breasts")
-- Negative tag filtering (removes low-value tags like `unknown`, `transparent background`)
-- Trigger tag injection
-- Score tag formatting for Pony models
-- Old trigger tag replacement
+`Taggers/Tagger.py` is a thin, model-agnostic base: it owns the local model folder
+(pathed to `TagManagement/Models/<name>`), the HuggingFace download, and the
+load/unload lifecycle (it's a context manager). Concrete taggers just declare their
+repository + files and implement inference + preprocessing. Two families:
+
+| Tagger class | Model | Where it comes from | Inference | Notes |
+|--------------|-------|---------------------|-----------|-------|
+| `Eva02Tagger` | WD1.4 EVA02-Large | `SmilingWolf/wd-eva02-large-tagger-v3` | ONNX | 448px, the regression baseline, 4 rating outputs |
+| `EvaGiantTagger` | EVA-Giant (dbv4-full) | `animetimm/eva_giant_patch14_560.dbv4-full` | PyTorch | 560px input, ImageNet norm |
+| `ViTGiantTagger` | ViT-GiantOpt / SigLIP (dbv4-full) | `animetimm/vit_giantopt_patch16_siglip_384.dbv4-full` | PyTorch | 512px input (the "...384" name is misleading), SigLIP 0.5 norm |
+| `ConvNeXtV2Tagger` | ConvNeXtV2-Huge (dbv4-full) | `animetimm/convnextv2_huge.dbv4-full` | PyTorch | 512px input, ImageNet norm |
+
+The three Danbooru-v4 taggers share one shared base (`Dbv4Tagger.py`) because the
+`animetimm/*.dbv4-full` repos all use the same transformers/timm layout — input size
+and normalization come from each model's own `preprocess.json`, never from the repo
+name. They're lazy-imported in `Taggers/__init__.py` so loading the light ONNX path
+doesn't pull in `torch` for nothing. Taggers never apply thresholds themselves —
+that's always the autotagger's/ensemble's job.
+
+### Layer 2 — Ensembles
+
+`Ensembles/EnsembleTagger.py` is pure, model-free math over the sparse
+`{tag: confidence}` dicts each tagger produces. It's equal-weight, no learned
+weights, exact string matching. Two combine modes:
+
+- **`mean`** — divide every tag's summed confidence by the number of taggers `N`.
+  Simple, but a tag a model is *structurally* missing contributes a 0 that dilutes the
+  score.
+- **`taggers`** (default) — **vocabulary-aware**: each tag is divided only by the
+  number of taggers whose vocab actually contains it, so a missing tag is treated as
+  an *absence*, not a false low detection. This is the mode you want since the four
+  models don't share the same vocab. `--combine taggers`/`mean` picks it at runtime.
+
+There's also an online `prune_accumulator` that drops tags that can no longer reach
+threshold no matter what the remaining taggers do, to keep the in-memory accumulators
+small.
+
+### Layer 3 — Autotaggers (what you actually run)
+
+Two runnable leaves, both extending the shared sliding-window mechanism:
+
+- **`Eva02SlidingWindowAutotagger`** — the known-good **regression baseline**.
+  Runs exactly one tagger (WD1.4 EVA02-Large) and its merge result is thresholded
+  directly. It's the reference every change is checked against.
+- **`EnsembleSWAutoTagger`** — the **multi-model ensemble**. Runs several taggers
+  (`--taggers eva02,eva_giant,vit_giant,convnextv2`, all four by default) and
+  averages their confidences via `EnsembleTagger`, thresholds applied *after* the
+  ensemble. On a 24 GB card it runs **tagger-major**: one tagger loaded at a time,
+  the whole dataset, accumulate sparse sums, free it, next one — then a final in-RAM
+  pass divides, selects, and writes each `.txt` once. Ordering is strictly
+  window-merge → per-tagger result → ensemble → threshold → filter → output.
+
+### CLI flags
+
+The shared flags (on every autotagger leaf, defined in `Autotagger.py`):
+
+| Flag | What it does |
+|------|--------------|
+| `--data_dir` | Folder of images to tag (required) |
+| `--threshold` | Default confidence threshold |
+| `--general_threshold` / `--character_threshold` | Per-category thresholds (override `--threshold`) |
+| `--undesired_tags` | Comma list of tags to drop |
+| `--mode_append` | Append to existing `.txt` instead of overwriting |
+| `--recursive_gather` | Search subdirectories too |
+| `--frequency_tags` | Print a tag-frequency report at the end |
+| `--num_data_loader_workers` | Parallel image/crop loaders (parallelism) |
+| `--window_size_cap` | Hard cap window size in px (0 = image short axis) |
+| `--window_stride_ratio` | Window stride (default 0.9 ≈ 10% overlap) |
+| `--use_sequential` | Infer crops one at a time (lower peak memory) |
+| `--use_gpu` | Run on CUDA |
+| `--bf16` | bfloat16 for the PyTorch taggers — ~2-4x faster + half the VRAM on Ampere+ |
+| `--hf_token` | Token for the first download of a gated model |
+| `--no_download` | Never download, load from local `Models/` only |
+| `--force_download` | Re-pull the models even if present |
+| `--verbose` / `--debug_print` | Per-image inference breakdown / per-tag confidence dump |
+
+`EnsembleSWAutoTagger` adds:
+
+| Flag | What it does |
+|------|--------------|
+| `--taggers` | Comma list: `eva02`, `eva_giant`, `vit_giant`, `convnextv2` (default all four) |
+| `--combine` | `taggers` (vocabulary-aware, default) or `mean` (plain /N) |
+| `--debug_taggers` | Print each tagger's pre-ensemble confidence per image (high memory) |
+| `--debug_taggers_top` | With the above, how many top tags to list per image |
+
+### Running from the command line
+
+The easiest path is the **`.bat` launchers** in `TagManagement/` (in the
+[Tagging Launchers](#tagging-launchers) section) — you set `DATA_DIR` / `TRIGGER` /
+thresholds once at the top and double-click. Reach for the raw CLI below when you
+want to flip a single flag (a different threshold, a tagger subset, `--use_sequential`,
+`--debug_print`, ...) without editing a file.
+
+```powershell
+# from the project root, venv active
+# single-model baseline (EVA02-Large)
+python TagManagement\Autotaggers\Eva02SlidingWindowAutotagger.py `
+    --data_dir "your\images" --use_gpu --character_threshold=1 --general_threshold=0.65
+
+# the full 4-model ensemble, fast bf16 defaults
+python TagManagement\Autotaggers\EnsembleSWAutoTagger.py `
+    --data_dir "your\images" --use_gpu --bf16 `
+    --general_threshold=0.475 --character_threshold=0.65 `
+    --num_data_loader_workers=6 --mode_append
+
+# run a subset of taggers
+python TagManagement\Autotaggers\EnsembleSWAutoTagger.py `
+    --data_dir "your\images" --taggers eva02,convnextv2 --use_gpu
+```
+
+(The `\` is just PowerShell line-continuation — collapse to one line if you prefer.)
+
+**VRAM (GPU mode).** Your peak comes from the *single largest* model you load at
+once (the ensemble swaps them one at a time, so they don't stack). The single-model
+EVA02 baseline (ONNX) is light — **any card works, ~4–6 GB is comfortable**. The four
+Danbooru-v4 PyTorch taggers are the heavy ones: with the default batched, `--bf16`
+inference the **minimum is roughly 8 GB of VRAM**, and **16 GB is the comfortable
+target** (the `.bat` defaults were tuned for a ~24 GB card). Peak also scales with
+image size, `--window_size_cap`, and `--num_data_loader_workers`. If you're short of
+VRAM, fit smaller cards by adding `--use_sequential`, lowering `--window_size_cap`,
+and dropping the worker count.
+
+---
+
+## Tagging Launchers
+
+These `.bat` files in `TagManagement/` set the common config and run the right
+scripts — edit the `DATA_DIR` / `TRIGGER` / thresholds at the top, then double-click.
+
+| Launcher | What it does |
+|----------|--------------|
+| `Run EnsembleAutotagger.bat` | The main one. Runs the 4-model ensemble (`--bf16`, general 0.475 / char 0.65, 6 workers, append, GPU), then hands off to `DatasetPreparer`. |
+| `Run Eva02SlidingWindowAutotagger.bat` | Single-model EVA02 baseline (general 0.65 / char 1.0), then `DatasetPreparer`. |
+| `Run Add Trigger.bat` | Just `DatasetPreparer` — adds a trigger tag and strips an old one. Handy after a re-tag. |
+| `Run UpscaleImages.bat` | Runs `Utilities/Image/ImageUpscaler.py` with the local ONNX upscaler onto a target folder. |
+
+Each launcher auto-detects the project venv and errors out cleanly if `Setup.bat`
+wasn't run.
+
+---
+
+## DatasetPreparer
+
+`TagManagement/Utility/DatasetPreparer.py` — the post-processor that reads each
+tagged `.txt` and makes it training-friendly. Pipeline, in order:
+
+1. Escape parentheses and convert underscores → spaces (Danbooru → SD prompt form).
+2. Drop your `--undesired_tags` (defaults to a built-in negative set: `unknown`,
+   costuming/alternate noise, and the `score_*` tags, etc.).
+3. **Precedence pruning** — keep the strongest descriptor per anatomy category
+   (e.g. `huge breasts` beats `breasts`), skipped when multiple subjects are present.
+4. Prepend a `--quality_tags` value if set (e.g. `score_9`).
+5. Remove a `--old_trigger_tag`, then prepend the new `--trigger_tag`.
+6. Dedupe while preserving order.
+
+```powershell
+python TagManagement\Utility\DatasetPreparer.py --data_dir "your\images" --trigger_tag "@artist" --old_trigger_tag "@old"
+```
+
+There's also a `RefactorReference/` folder with the original standalone
+experimental script (`AutoTaggerExp.py`) and its launcher — kept purely so the
+refactored classes can be diffed against the reference they were written to match.
 
 ---
 
 ## Utilities
+
+General tools in `Utilities/`, grouped by what they touch.
 
 ### Image Utilities (`Utilities/Image/`)
 
@@ -120,89 +333,42 @@ Post-processing tool for prepared tag files. Cleans, prunes, and formats tags fo
 | `DatasetMigrater.py` | Migrates images and their tag files between directories |
 | `ImageConverter.py` | Converts images between formats |
 | `ImageCropper.py` | Crops a percentage from the bottom of images |
-| `ImageUpscaler.py` | Upscales images using ONNX upscaler models |
+| `ImageUpscaler.py` | Upscales images with an ONNX upscaler model (`--onnx_model`, `--input_dir`, `--output_dir`, `--scale`) |
 | `RandomFlip.py` | Randomly flips images horizontally/vertically |
 
 ### Tag File Utilities (`Utilities/Tag Files/`)
 
 | Script | Description |
 |--------|-------------|
-| `DanbooruTagScraper.py` | Scrapes tag data from Danbooru API (credentials from `config.py`) |
-| `FilterTagFile.py` | Filters Danbooru tag CSVs by post count threshold, category, and other criteria |
-| `anima_tags.csv` | Pre-filtered animation tag dataset |
-| `danbooru_tags_post_count.csv` | Full Danbooru tag database with post counts |
+| `DanbooruTagScraper.py` | Pulls the tag list from the Danbooru API into a timestamped CSV (credentials from `config.py`) |
+| `FilterTagFile.py` | Filters a Danbooru tag CSV by post-count threshold / category into a cleaner tag set |
 
 ### Dataset Utilities (`Utilities/Dataset/`)
 
 | Script | Description |
 |--------|-------------|
-| `FilenameRemoveBrackets.bat` | Removes brackets from filenames |
-| `RemoveCleanupTextFromName.py` | Strips cleanup text from image filenames |
+| `PngInfoPromptToTags.py` | Extracts the embedded prompt from PNG metadata and reformats it into tag `.txt` files |
+| `RemoveCleanupTextFromName.py` | Strips cleanup/annotation text from image filenames |
 | `SortTagsOutputAsIntervals.py` | Sorts and formats tag lists into fixed-size intervals |
-
-### Statistics Utilities (`Utilities/Stats/`)
-
-| Script | Description |
-|--------|-------------|
-| `TrainLogParser.py` | Parses SD training logs and exports metrics to Excel (step or epoch mode) |
-| `Run LogParse.bat` | Launcher for the training log parser |
-| `PngInfoPromptToTags.py` | Extracts embedded prompts from PNG metadata and converts to tag format |
-| `LaunchTensorboard.bat` | Shortcut to launch TensorBoard for training visualization |
-| `PlotGraph.ipynb` | Jupyter notebook for plotting training graphs |
+| `FilenameRemoveBrackets.bat` | Removes brackets from filenames in batch |
 
 ### LoRA Utilities (`Utilities/Lora/`)
 
 | Script | Description |
 |--------|-------------|
-| `AddMetadataThumbnail.py` | Adds activation tags, thumbnails, and metadata to `.safetensors` LoRA files |
-
----
-
-## Taggers
-
-Pre-downloaded WD14 tagger model directories in `Taggers/`:
-
-| Directory | Architecture | Version |
-|-----------|-------------|---------|
-| `wd-v1-4-swinv2-tagger-v2/` | SwinV2 | v2 |
-| `wd-swinv2-tagger-v3/` | SwinV2 | v3 |
-| `wd-v1-4-vit-tagger/` | ViT | v1.4 |
-| `wd-v1-4-vit-tagger-v2/` | ViT | v2 |
-| `wd-vit-tagger-v3/` | ViT | v3 |
-| `wd-v1-4-convnext-tagger/` | ConvNeXt | v1.4 |
-| `wd-v1-4-convnext-tagger-v2/` | ConvNeXt | v2 |
-| `wd-convnext-tagger-v3/` | ConvNeXt | v3 |
-| `wd-v1-4-convnextv2-tagger-v2/` | ConvNeXtV2 | v2 |
-| `wd-v1-4-moat-tagger-v2/` | Moat | v2 |
-| `eva02-vit-large-448-8046/` | EVA02 ViT Large | - |
+| `AddMetadataThumbnail.py` | Adds activation tags, a thumbnail, and metadata into `.safetensors` LoRAs (single file or whole folder) |
+| `TrainLogParser.py` | Parses SD training logs and exports the metrics to Excel (step or epoch mode) — used with `LaunchTensorboard.bat` |
+| `LaunchTensorboard.bat` | Shortcut to fire up TensorBoard for the training curves |
+| `PlotGraph.ipynb` | Jupyter notebook for plotting training graphs |
 
 ---
 
 ## Upscalers
 
-ONNX and PyTorch upscaler models in `Upscalers/`:
-
-| File | Format |
-|------|--------|
-| `4xNomos8kDAT.onnx` | ONNX |
-| `4xNomos8kDAT.pth` | PyTorch |
-
----
-
-## Modules
-
-- **`Modules/llama_src/`** - llama.cpp source repository for local LLM inference
-
----
-
-## Archived
-
-Deprecated or legacy tools in `Archived/`:
-
-- `AutoTaggerE621.py` - Legacy E621 autotagger
-- `WebpToGif.py` - WebP to GIF converter
-- `Caption UI/` - Legacy caption UI tools (llama.cpp build and launcher)
-- `Quantum Merge/` - SDXL model merging tools
+`Upscalers/` holds the upscaler model weights (e.g. the 4x Nomos 8K DAT model).
+The files are binary blobs kept out of git (the folder is preserved with a
+`.gitkeep`), so drop your weights in here and point
+`Utilities/Image/ImageUpscaler.py` — or `Run UpscaleImages.bat` — at them.
 
 ---
 
@@ -210,19 +376,38 @@ Deprecated or legacy tools in `Archived/`:
 
 ```
 r3c-dataset-aio/
-├── config.py                # API credentials (gitignored, create manually)
-├── Tag Tools/               # Core tagging and dataset preparation tools
-├── Taggers/                 # WD14 tagger model directories
-├── Upscalers/               # Image upscaler models
+├── Setup.bat                     # One-shot venv + install
+├── requirements.txt
+├── README.md
+├── TagManagement/                # The autotagger system
+│   ├── Autotaggers/              # Entry points (run these)
+│   │   ├── Autotagger.py                 # base: config, discovery, .txt, CLI
+│   │   ├── SlidingWindowAutotagger.py    # shared sliding-window mechanism
+│   │   ├── Eva02SlidingWindowAutotagger.py   # single-model baseline
+│   │   └── EnsembleSWAutoTagger.py       # multi-model ensemble
+│   ├── Taggers/                  # The models
+│   │   ├── Tagger.py                 # base: pathing, download, lifecycle
+│   │   ├── Eva02Tagger.py            # ONNX WD1.4 EVA02-Large
+│   │   ├── Dbv4Tagger.py             # shared PyTorch Danbooru-v4 pipeline
+│   │   ├── EvaGiantTagger.py
+│   │   ├── ViTGiantTagger.py
+│   │   └── ConvNeXtV2Tagger.py
+│   ├── Ensembles/
+│   │   └── EnsembleTagger.py       # pure sparse equal-weight combining
+│   ├── Utility/
+│   │   └── DatasetPreparer.py      # post-process .txt tag files
+│   ├── RefactorReference/          # the original experimental script, for diffing
+│   │   ├── AutoTaggerExp.py
+│   │   └── Run AutoTagSlidingWindow.bat
+│   ├── Models/                     # tagger weights (downloaded; not committed)
+│   ├── Run EnsembleAutotagger.bat
+│   ├── Run Eva02SlidingWindowAutotagger.bat
+│   ├── Run Add Trigger.bat
+│   └── Run UpscaleImages.bat
 ├── Utilities/
-│   ├── Image/               # Image processing utilities
-│   ├── Tag Files/           # Tag management and scraping tools
-│   ├── Dataset/             # Dataset manipulation utilities
-│   ├── Stats/               # Training log analysis tools
-│   └── Lora/                # LoRA metadata tools
-├── Modules/                 # External modules (llama.cpp)
-├── Archived/                # Deprecated tools
-├── requirements.txt         # Python dependencies
-├── Setup.bat                # Project setup script
-└── PROJECT_FILES.md         # Detailed file inventory
+│   ├── Image/                      # image processing
+│   ├── Tag Files/                  # Danbooru tag scraping + filtering
+│   ├── Dataset/                    # dataset/filename/tag-list tools
+│   └── Lora/                       # LoRA metadata + training log tools
+└── Upscalers/                      # upscaler weights (not committed)
 ```

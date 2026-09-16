@@ -10,9 +10,12 @@ import re # Regex
 
 datasetPath = r"F:\StableDiffusion\Datasets\3 Pending\RJeezz\1_Style"
 
-# For ease of use - reusing the tag file from the eva tagger
+# For ease of use - reusing the tag file from the eva tagger. The Eva02 model
+# (and its selected_tags.csv) now lives under TagManagement/Models/. Resolve the
+# project root from this file (two levels up) so the path works no matter what
+# directory the script is launched from.
 CSV_FILE = "selected_tags.csv"
-TAGGER_PATH = "./Taggers/"
+TAGGER_PATH = str(pathlib.Path(__file__).resolve().parents[2] / "TagManagement" / "Models") + "\\"
 TAGGERS = [ "wd-eva02-large-tagger-v3" ]
 CSV_HEADER_ERROR = "Unexpected .csv header format detected: "
 
