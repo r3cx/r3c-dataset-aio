@@ -311,11 +311,6 @@ tagged `.txt` and makes it training-friendly. Pipeline, in order:
 ```powershell
 python TagManagement\Utility\DatasetPreparer.py --data_dir "your\images" --trigger_tag "@artist" --old_trigger_tag "@old"
 ```
-
-There's also a `RefactorReference/` folder with the original standalone
-experimental script (`AutoTaggerExp.py`) and its launcher — kept purely so the
-refactored classes can be diffed against the reference they were written to match.
-
 ---
 
 ## Utilities
