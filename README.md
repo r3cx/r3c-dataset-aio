@@ -1,14 +1,12 @@
 # r3c-dataset-aio
 
 Hey, this is my dataset prep playground. It's basically everything I use to turn a
-folder of anime art into something ready for SD/LoRA training — autotagging (which
-is now a proper multi-model ensemble thing), tag cleaning, upscaling, LoRA metadata,
-and training log parsing.
+folder of anime art into something ready for LoRA training — upscaling, autotagging (via a multi-model ensemble), tag cleaning, parsing training logs, and setting up LoRA metadata.
 
 The tagger side got a big refactor. It used to be a couple of fat single-file
 scripts; now it's a small package with a clean three-layer design — **tagger models,
 ensembles, and autotagger entry points** — all built on top of one shared
-sliding-window pipeline. The rest of the tools live under `Utilities/`.
+sliding-window pipeline. The rest of my random set of tools live under `Utilities/`.
 
 ---
 
@@ -313,11 +311,6 @@ tagged `.txt` and makes it training-friendly. Pipeline, in order:
 ```powershell
 python TagManagement\Utility\DatasetPreparer.py --data_dir "your\images" --trigger_tag "@artist" --old_trigger_tag "@old"
 ```
-
-There's also a `RefactorReference/` folder with the original standalone
-experimental script (`AutoTaggerExp.py`) and its launcher — kept purely so the
-refactored classes can be diffed against the reference they were written to match.
-
 ---
 
 ## Utilities
@@ -396,9 +389,6 @@ r3c-dataset-aio/
 │   │   └── EnsembleTagger.py       # pure sparse equal-weight combining
 │   ├── Utility/
 │   │   └── DatasetPreparer.py      # post-process .txt tag files
-│   ├── RefactorReference/          # the original experimental script, for diffing
-│   │   ├── AutoTaggerExp.py
-│   │   └── Run AutoTagSlidingWindow.bat
 │   ├── Models/                     # tagger weights (downloaded; not committed)
 │   ├── Run EnsembleAutotagger.bat
 │   ├── Run Eva02SlidingWindowAutotagger.bat
