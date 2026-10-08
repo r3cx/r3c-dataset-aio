@@ -18,13 +18,14 @@ from safetensors.torch import save_file
 MODE = "FILE"  # Options: "FOLDER", "FILE"
 
 # Target path (folder path if MODE="FOLDER", file path if MODE="FILE")
-TARGET_PATH = r"F:\StableDiffusion\Models\Lora\Anima\Internal\Pending\Nebukurochan-Anima-A5.safetensors"
+# Finds a preview image with the same name and supported extension (e.g., .png, .jpg, .jpeg, .webp)
+TARGET_PATH = r"F:\StableDiffusion\Models\Lora\Anima\Internal\Pending\Hermityy-Anima-A7.safetensors"
 
-# Activation / Trigger Tag (e.g., "@ahonise"). Leave as "" to disable.
-ACTIVATION_TAG = r"@nebukurochan"
+# Activation / Trigger Tag (e.g., "@artist" or "tag"). Leave as "" to disable.
+ACTIVATION_TAG = r"@hermityy"
 
 # Toggle to clear dataset information in metadata
-# NOTE THAT THIS OPERATION IS sDESTRUCTIVE AND CANNOT BE UNDONE
+# NOTE THAT THIS OPERATION IS DESTRUCTIVE AND CANNOT BE UNDONE
 # True - Deletes dataset tags and info from the metadata
 CLEAR_DATASET_INFO = False  
 
