@@ -323,7 +323,7 @@ General tools in `Utilities/`, grouped by what they touch.
 |--------|-------------|
 | `ComputeResRatios.py` | Calculates constant-area resolutions for various aspect ratios from a base dimension |
 | `CopyAndRenameImages.py` | Copies and renames images in batch |
-| `DatasetMigrater.py` | Migrates images and their tag files between directories |
+| `DatasetMigrator.py` | Migrates images and their tag files between directories |
 | `ImageConverter.py` | Converts images between formats |
 | `ImageCropper.py` | Crops a percentage from the bottom of images |
 | `ImageUpscaler.py` | Upscales images with an ONNX upscaler model — model runs at native ratio, `--scale` sets the final output size, `--target_mp` only upscales images under a megapixel cutoff, `--no_tiling` for one-pass, `--recursive`, `--dry_run` |
