@@ -37,5 +37,5 @@ gradio>=4.40.0
 # Optional (but useful)
 # -------------------------------
 matplotlib
-onnxruntime-gpu==1.19.2
+onnxruntime-gpu==1.21.0
 openpyxl
